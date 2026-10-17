@@ -3,8 +3,18 @@ import { Soundfont2Sampler } from "../smplr/soundfont2";
 import { globals } from "./globals";
 
 export const DOUBLE_CLICK_SECOND_BUFFER = 0.2;
+export const TOUCH_SCROLL_SECOND_BUFFER = 0.2;
+export const TOUCH_SCROLL_PIXEL_DELTA_BUFFER = 2;
 export const DEFAULT_VOLUME = 50;
 export const MAX_USER_INSTRUMENTS = 16;
+export const MAX_BABY_FRAMES = 4;
+export const MAX_BABY_Y_FRAMES = 5;
+export const DEFAULT_SOUNDFONT_FILE_NAME = "microgm.sf2";
+
+export const DEFAULT_BEAT_WIDTH = 15;
+export const DEFAULT_BEAT_HEIGHT = 15;
+export const DEFAULT_BEAT_WIDTH_MOBILE = 30;
+export const DEFAULT_BEAT_HEIGHT_MOBILE = 30;
 
 export const zIndex_placedNote = 1;
 export const zIndex_selectedNote = 2;
@@ -16,6 +26,7 @@ export const zIndex_resetPlayheadButton = 5;
 export const lightColor = '#b2bcc2'; // 'rgba(17, 156, 238, 0.25)';
 export const mediumColor = '#b2bcc2'; // 'rgba(17, 156, 238, 0.5)'
 export const veryLightColor = '#ced8e0ff'; //"rgba(17, 156, 238, 0.12)";
+export const darkColor = '#6e777d';
 
 function shuffleArray(arr: unknown[]) {
     for (var i = arr.length - 1; i > 0; i--) {
@@ -25,6 +36,22 @@ function shuffleArray(arr: unknown[]) {
         arr[j] = temp;
     }
 }
+
+const timeouts: {[key: number]: (() => void) | undefined } = {};
+export const windowSetTimeout = function(callback: () => void, ms: number) {
+    const id = window.setTimeout(callback, ms);
+    timeouts[id] = callback;
+    return id;
+};
+
+export const triggerTimeoutEarly = function(id: number) {
+    const callback = timeouts[id];
+    if (callback) {
+        clearTimeout(id);
+        callback();
+        delete timeouts[id];
+    }
+};
 
 export const sf2DefaultColours = [
   "#f1ad85",
@@ -65,7 +92,7 @@ export const pianoRollKeys: MidiNote[] = [];
 );
 pianoRollKeys.push(...["C7", "Db7", "D7", "Eb7", "E7", "F7"]);
 pianoRollKeys.reverse();
-export const pianoRollBeats: number[] = new Array(160);
+export const pianoRollBeats: number[] = new Array(320);
 pianoRollBeats.fill(0);
 
 const keyboardPianoKeys = new Map(
@@ -153,6 +180,7 @@ export function getARandomDischordantNote() {
 
 export type UserInstrument = {
   name: string;
+  fileName: string;
   color: string;
   sf2Sampler: Soundfont2Sampler | undefined;
   sf2InstrumentName: string | undefined;
@@ -178,6 +206,7 @@ export function isInstrumentEqual(a: UserInstrument, b: UserInstrument) {
 
 export type OptionalUserInstrument = {
   name?: string;
+  fileName?: string;
   color?: string;
   sf2InstrumentName?: string;
   volume?: number;
@@ -208,8 +237,8 @@ export function isNoteEqual(a: InstrumentInstruction, b: InstrumentInstruction) 
     && a.midiNote === b.midiNote
     && a.subdivisionType === b.subdivisionType;
 }
-export type Offset = { x: number, y: number };
-export type NoteIdWithOffset = { offset: Offset };
+export type Offset = { x: number; y: number };
+export type NoteIdWithOffset = { noteId: number; offset: Offset };
 export type InstrumentInstructionWithOffset = { instrumentInstruction: InstrumentInstruction, offset: Offset };
 export type Composition = {
   [id: MidiBeat]: {
@@ -274,13 +303,30 @@ export type Song = {
 };
 export enum InputMode {
   DEFAULT = "default",
-  SELECT = "select"
+  SELECT = "select",
+  DELETE = "delete",
 }
-export type CursorPosition = { midiNote: MidiNoteNum; midiBeat: MidiBeat; };
+export type Position = { x: number, y: number };
+export type CursorPosition = { midiNote: MidiNoteNum; midiBeat: MidiBeat; clientPos?: Position };
+export const distBetween = (a: Position, b: Position) => {
+  return Math.sqrt(Math.pow(a.x - b.x, 2) + Math.pow(a.y - b.y, 2));
+};
 
 export const AudioContextContext = createContext<AudioContext | undefined>(undefined);
 
 export type PlayheadBounds = { start: Offset['x'], end?: Offset['x'] };
+
+export function beatFromEvent(e: { target: HTMLDivElement, clientX: number }, beatWidth: number) {
+  const clientRect = e.target.getBoundingClientRect();
+  // Beats are 1-indexed, hence the +1
+  return Math.floor((e.clientX - clientRect.left) / beatWidth) + 1;
+}
+
+export function midiNoteFromEvent(e: { target: HTMLDivElement, clientY: number }, beatHeight: number) {
+  const clientRect = e.target.getBoundingClientRect();
+  const yIndex = Math.floor((e.clientY - clientRect.top) / beatHeight);
+  return pianoRollKeys[yIndex];
+}
 
 export function getMidiBeatFromGridBeat(gridBeat: MidiBeat, subdivisionType: SubdivisionType, noteSubdivisionType: SubdivisionType, roundUpInstead: boolean = false) {
   let midiBeat = gridBeat;
@@ -347,19 +393,18 @@ export function convertCompositionToCompositionByInstrument(composition: Composi
   return compositionByInstrument;
 }
 
-export const DEFAULT_BEAT_WIDTH = 15;
-export const DEFAULT_BEAT_HEIGHT = 15;
-
 export function getStartOfMeasureFromBeat(beat: MidiBeat, timeSignature: TimeSignature) {
   const timeSignatureVal = timeSignature === TimeSignature.ts4_4 ? 4 : 3;
   const measureBeatMultiplier = 4 * timeSignatureVal;
-  return Math.floor(beat / measureBeatMultiplier) * measureBeatMultiplier
+  // Beats are 1-indexed, hence the -1
+  return Math.floor((beat - 1) / measureBeatMultiplier) * measureBeatMultiplier
 }
 
 export function getEndOfMeasureFromBeat(beat: MidiBeat, timeSignature: TimeSignature) {
   const timeSignatureVal = timeSignature === TimeSignature.ts4_4 ? 4 : 3;
   const measureBeatMultiplier = 4 * timeSignatureVal;
-  return Math.ceil((beat + 1) / measureBeatMultiplier) * measureBeatMultiplier;
+  // Beats are 1-indexed, hence the -1
+  return Math.ceil((beat + 1 - 1) / measureBeatMultiplier) * measureBeatMultiplier;
 }
 
 export function getEndOfMeasureToLoopAtBeat(

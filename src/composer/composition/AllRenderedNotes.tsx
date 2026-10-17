@@ -13,10 +13,16 @@ import { BeatSizeContext } from "../contexts/BeatSizeContextProvider";
 
 
 const PlacedNotesOverlay = styled.div<{ $shouldMouseIgnoreMe: boolean }>`
-  position: absolute;
+  position: sticky;
+  pointer-events: ${({ $shouldMouseIgnoreMe }) => $shouldMouseIgnoreMe ? 'none' : 'unset' };
+  touch-action: ${({ $shouldMouseIgnoreMe }) => $shouldMouseIgnoreMe ? 'none' : 'manipulation' };
+  z-index: 1;
+`;
+
+const PlacedNotesOffset = styled.div`
+  position: relative;
   top: 16px;
   left: 30px;
-  pointer-events: ${({ $shouldMouseIgnoreMe }) => $shouldMouseIgnoreMe ? 'none' : 'unset' };
 `;
 
 const RectSelector = styled.div<{ $left: number, $top: number, $width: number, $height: number }>`
@@ -34,7 +40,7 @@ const RectSelector = styled.div<{ $left: number, $top: number, $width: number, $
 function StaticPlacedNotes({
   handlePlacedNoteMouseDown,
 }: {
-  handlePlacedNoteMouseDown: (e: React.MouseEvent<HTMLDivElement, MouseEvent>, noteId: NoteId) => void
+  handlePlacedNoteMouseDown: (e: React.PointerEvent<HTMLDivElement>, noteId: NoteId) => void
 }) {
   const { _userInstruments } = useContext(UserInstrumentContext)!;
   const {
@@ -95,6 +101,7 @@ function CreatedNote({
   } = useContext(UserInstrumentContext)!;
   const { _clickedNote } = useContext(ClickedSelectedNotesContext)!;
   const { _subdivisionType } = useContext(SubdivisionTypeContext)!;
+  const { _isTemporaryTouchStart } = useContext(MouseDownContext)!;
   const topmostMidiNote = useMemo(() => toMidi(pianoRollKeys[0])!, []);
   const userInstrument = _userInstruments[_userInstrumentIndex];
 
@@ -104,6 +111,7 @@ function CreatedNote({
       && _startingCursorPos
       && _cursorPosition
       && !_clickedNote
+      && !_isTemporaryTouchStart
       && (
         <PlacedNote
           topmostMidiNote={topmostMidiNote}
@@ -252,13 +260,13 @@ export function AllRenderedNotes({
   _cursorXOffset,
   _cursorPosition,
   _startingCursorPos,
-  handlePlacedNoteMouseDown
+  handlePlacedNoteMouseDown,
 }: {
   _inputMode: InputMode,
   _cursorXOffset: number,
   _cursorPosition: CursorPosition | undefined,
   _startingCursorPos: CursorPosition | undefined,
-  handlePlacedNoteMouseDown: (e: React.MouseEvent<HTMLDivElement, MouseEvent>, noteId: NoteId) => void
+  handlePlacedNoteMouseDown: (e: React.PointerEvent<HTMLDivElement>, noteId: NoteId) => void
 }) {
   const { _isCompositionMouseDown: _isMouseDown } = useContext(MouseDownContext)!;
 
@@ -276,10 +284,12 @@ export function AllRenderedNotes({
     [_cursorPosition, _inputMode, _startingCursorPos]);
   return (
     <PlacedNotesOverlay $shouldMouseIgnoreMe={_isMouseDown || _inputMode === InputMode.SELECT}>
-      {staticPlacedNotes}
-      {createdNote}
-      {draggingExistingNote}
-      {draggingRectSelector}
+      <PlacedNotesOffset>
+        {staticPlacedNotes}
+        {createdNote}
+        {draggingExistingNote}
+        {draggingRectSelector}
+      </PlacedNotesOffset>
     </PlacedNotesOverlay>
   );
 }

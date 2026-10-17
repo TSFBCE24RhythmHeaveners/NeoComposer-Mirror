@@ -3,7 +3,7 @@ import styled from "styled-components";
 import { PlayheadContext } from "./contexts/PlayheadContextProvider";
 import { CompositionContext } from "./contexts/CompositionContextProvider";
 import { TimeSignatureContext } from "./contexts/TimeSignatureContextProvider";
-import { AudioContextContext, getEndOfMeasureFromBeat, getEndOfMeasureToLoopAtBeat, getStartOfMeasureFromBeat, InputMode, InstrumentInstruction, mediumColor, NoteIdWithOffset, pianoRollBeats, pianoRollKeys, playCompositionNotesAtBeat, zIndex_playhead } from "./consts";
+import { AudioContextContext, beatFromEvent, getEndOfMeasureFromBeat, getEndOfMeasureToLoopAtBeat, getStartOfMeasureFromBeat, InputMode, InstrumentInstruction, mediumColor, NoteIdWithOffset, pianoRollBeats, pianoRollKeys, playCompositionNotesAtBeat, zIndex_playhead } from "./consts";
 import { SongSettingsContext } from "./contexts/SongSettingsContextProvider";
 import { UserInstrumentContext } from "./contexts/UserInstrumentContextProvider";
 import { PlayheadPosXContext } from "./contexts/PlayheadPosXContextProvider";
@@ -13,39 +13,47 @@ import { BeatSizeContext } from "./contexts/BeatSizeContextProvider";
 import { ClickedSelectedNotesContext } from "./contexts/ClickedSelectedNotesContextProvider";
 
 const PlayheadContainer = styled.div<{ $beatHeight: number }>`
-  height: ${({ $beatHeight }) => `${pianoRollKeys.length * $beatHeight - 62}px`};
   content: ' ';
-  position: absolute;
+  position: sticky;
   top: 0;
-  left: 0;
   user-select: none;
   pointer-events: none;
+  z-index: 4;
+`;
+
+const PlayheadTopLeftCoverup = styled.div`
+  width: 30px;
+  height: 16px;
+  background: white;
+  position: absolute;
+  border-bottom: 1px solid black;
 `;
 
 const PlayheadStickyContainer = styled.div<{ $isMouseDown: boolean, $beatWidth: number }>`
-  position: sticky;
+  position: absolute;
   background: white;
-  top: -16px;
-  width: ${({ $beatWidth }) => `${(pianoRollBeats.length * $beatWidth) + 32}px`};
+  top: 0px;
+  left: 30px;
+  width: ${({ $beatWidth }) => `${(pianoRollBeats.length * $beatWidth)}px`};
   cursor: ${({ $isMouseDown }) => $isMouseDown ? 'grabbing' : 'pointer'};
   height: 16px;
-  border-bottom: 1px solid ${mediumColor};
+  border-bottom: 1px double ${mediumColor};
   z-index: ${zIndex_playhead};
   pointer-events: all;
 `;
 
 const PlayheadSubContainer = styled.div`
-  position: relative; 
-  left: 30px;
+  position: relative;
+  margin-right: 30px;
 `;
 
-const BabyPlayheadImg = styled.img<{ $frame: number, $playheadPosX: number, $beatWidth: number, $preventPointerEvents: boolean }>`
+const BabyPlayheadImg = styled.img<{ $frame: number, $yFrame: number, $playheadPosX: number, $beatWidth: number, $preventPointerEvents: boolean }>`
   width: 20px;
   height: 20px;
   image-rendering: pixelated;
   background-image: url("baby_dance_sheet.png");
   position: absolute;
-  background-position: ${({ $frame }) => `${$frame * -20}px 0px`};
+  background-position: ${({ $frame, $yFrame }) => `${$frame * -20}px ${$yFrame * -20}px`};
   left: ${({ $playheadPosX, $beatWidth }) => `${Math.max($playheadPosX - $beatWidth - 2, -2)}px`};
   top: -4px;
   cursor: grab;
@@ -65,8 +73,8 @@ const PixelCoda = styled.div<{
   background: ${({ $y, $inverted }) => `url('./toolicons1x.png') repeat scroll ${
     $inverted ? '-25px' : '0'
   } ${$y}px transparent`};
-  width: 16px; // TODO(jaketrower):??
-  height: 15px; // TODO(jaketrower):??
+  width: 16px;
+  height: 15px;
   image-rendering: pixelated;
   cursor: grab;
   position: absolute;
@@ -78,11 +86,6 @@ const PixelCoda = styled.div<{
   pointer-events: ${({ $preventPointerEvents }) => $preventPointerEvents ? 'none' : 'normal' };
 `;
 
-function beatFromEvent(e: { target: HTMLDivElement, clientX: number }, beatWidth: number) {
-  const clientRect = e.target.getBoundingClientRect();
-  return Math.floor((e.clientX - clientRect.left) / beatWidth);
-}
-
 export function PlayheadNode({
   _inputMode,
   inputModeRef,
@@ -90,7 +93,7 @@ export function PlayheadNode({
   _inputMode: InputMode,
   inputModeRef: React.RefObject<InputMode>;
 }) {
-  const { babyDanceFrame } = useContext(BabyDanceFrameContext)!;
+  const { babyDanceFrame, babyDanceYFrame } = useContext(BabyDanceFrameContext)!;
   const {
     handleQuickPlayResetAtCurrentBeat,
     _isPlaying,
@@ -111,7 +114,7 @@ export function PlayheadNode({
   const { _compositionByInstructionIdRef, compositionRef } = useContext(CompositionActionsContext)!;
   const { _timeSignature, timeSignatureRef } = useContext(TimeSignatureContext)!;
   const { _playheadPosX, playheadPosXRef, setPlayheadPosX, } = useContext(PlayheadPosXContext)!;
-  const { selectedNotesRef, setSelectedNotes } = useContext(ClickedSelectedNotesContext)!;
+  const { toggleSelectionOnNoteSet } = useContext(ClickedSelectedNotesContext)!;
 
   const [_babyMouseDown, _setBabyMouseDown] = useState(false);
   const [_codaMouseDown, _setCodaMouseDown] = useState(false);
@@ -141,19 +144,19 @@ export function PlayheadNode({
     _setBabyMouseDown(newBabyMouseDown);
   }, []);
 
-  const handleCodaLeftMouseDown = useCallback((e: React.MouseEvent) => {
+  const handleCodaLeftMouseDown = useCallback((e: React.PointerEvent) => {
     if (inputModeRef.current === InputMode.SELECT) { return false; }
 
     const start = beatFromEvent({ target: playheadNodeElementRef.current! as HTMLDivElement, clientX: e.clientX - 30 }, beatWidthRef.current);
     setPlayheadMouseDown(true);
     _setCodaMouseDown(true);
-    startingPlayheadCursorPos.current = (userPlayheadBoundsRef.current?.end ?? endOfMeasureToLoopAtBeat) - 1;
+    startingPlayheadCursorPos.current = (userPlayheadBoundsRef.current?.end ?? endOfMeasureToLoopAtBeat);
     cursorPos.current = start;
     e.stopPropagation();
     return false;
   }, [beatWidthRef, endOfMeasureToLoopAtBeat, inputModeRef, setPlayheadMouseDown, userPlayheadBoundsRef]);
 
-  const handleCodaRightMouseDown = useCallback((e: React.MouseEvent) => {
+  const handleCodaRightMouseDown = useCallback((e: React.PointerEvent) => {
     if (inputModeRef.current === InputMode.SELECT) { return false; }
 
     const start = beatFromEvent({ target: playheadNodeElementRef.current! as HTMLDivElement, clientX: e.clientX - 30 }, beatWidthRef.current);
@@ -165,7 +168,7 @@ export function PlayheadNode({
     return false;
   }, [beatWidthRef, inputModeRef, setPlayheadMouseDown, userPlayheadBoundsRef]);
 
-  const handleBabyMouseDown = useCallback((e: React.MouseEvent) => {
+  const handleBabyMouseDown = useCallback((e: React.PointerEvent) => {
     if (inputModeRef.current === InputMode.SELECT) { return false; }
 
     const cursorBeat = playheadPosXRef.current / beatWidthRef.current;
@@ -185,21 +188,21 @@ export function PlayheadNode({
     return false;
   }, [audioContext, beatWidthRef, compositionRef, incrementBabyDanceFrame, inputModeRef, isPlayingRef, playheadPosXRef, setBabyMouseDown, tempoRef, userInstrumentsRef]);
 
-  const handleMouseDown = useCallback((e: React.MouseEvent) => {
+  const handleMouseDown = useCallback((e: React.PointerEvent) => {
     if (inputModeRef.current === InputMode.SELECT) { return false; }
 
-    const start = beatFromEvent({ target: e.target as HTMLDivElement, clientX: e.clientX - 30 }, beatWidthRef.current);
+    const start = beatFromEvent({ target: e.target as HTMLDivElement, clientX: e.clientX }, beatWidthRef.current);
     setBabyMouseDown(true);
     startingPlayheadCursorPos.current = start;
     cursorPos.current = start;
-    setPlayheadPosX((start + 1) * beatWidthRef.current);
+    setPlayheadPosX((start) * beatWidthRef.current);
     if (isPlayingRef.current) {
       handleQuickPlayResetAtCurrentBeat();
     } else {
       playCompositionNotesAtBeat({
         audioContext,
         composition: compositionRef.current,
-        midiBeat: start + 1,
+        midiBeat: start,
         tempo: tempoRef.current,
         userInstruments: userInstrumentsRef.current,
         incrementBabyDanceFrame,
@@ -211,22 +214,22 @@ export function PlayheadNode({
   }, [audioContext, beatWidthRef, compositionRef, handleQuickPlayResetAtCurrentBeat, incrementBabyDanceFrame, inputModeRef, isPlayingRef, setBabyMouseDown, setPlayheadPosX, tempoRef, userInstrumentsRef]);
 
   const selectNotesByMeasure = useCallback((startOfMeasure: number, endOfMeasure: number, compositionByInstructionId: Record<string, InstrumentInstruction>) => {
-      setSelectedNotes({
-        ...selectedNotesRef.current,
-        ...(Object.entries(compositionByInstructionId).reduce((acc, [noteId, instrumentInstruction]) => {
-          if (instrumentInstruction.midiBeat > startOfMeasure && instrumentInstruction.midiBeat <= endOfMeasure) {
-            return {
-              ...acc,
-              [noteId]: {
-                noteId: parseInt(noteId),
-                offset: { x: 0, y: 0 },
-              },
-            };
-          }
-          return acc;
-        }, {} as Record<string, NoteIdWithOffset>)),
-      });
-    }, [selectedNotesRef, setSelectedNotes]);
+    // TODO(jaketrower): check if they're all selected, and if so, unselect them, otherwise, select them.
+    toggleSelectionOnNoteSet({
+      ...(Object.entries(compositionByInstructionId).reduce((acc, [noteId, instrumentInstruction]) => {
+        if (instrumentInstruction.midiBeat > startOfMeasure && instrumentInstruction.midiBeat <= endOfMeasure) {
+          return {
+            ...acc,
+            [noteId]: {
+              noteId: parseInt(noteId),
+              offset: { x: 0, y: 0 },
+            },
+          };
+        }
+        return acc;
+      }, {} as Record<string, NoteIdWithOffset>)),
+    })
+  }, [toggleSelectionOnNoteSet]);
 
   const handleDoubleClick = useCallback((e: React.MouseEvent) => {
     const cursorBeat = beatFromEvent({ target: playheadNodeElementRef.current!, clientX: e.clientX - 30 }, beatWidthRef.current);
@@ -237,7 +240,7 @@ export function PlayheadNode({
       return false;
     }
 
-    if ((e.ctrlKey || e.metaKey) && userPlayheadBoundsRef.current !== undefined) {
+    if ((e.shiftKey) && userPlayheadBoundsRef.current !== undefined) {
       setUserPlayheadBounds({
         start: Math.min(userPlayheadBoundsRef.current.start, startOfClickedMeasure),
         end: Math.max(userPlayheadBoundsRef.current.end ?? 0, endOfClickedMeasure),
@@ -250,7 +253,7 @@ export function PlayheadNode({
     }
   }, [beatWidthRef, _compositionByInstructionIdRef, inputModeRef, selectNotesByMeasure, setUserPlayheadBounds, timeSignatureRef, userPlayheadBoundsRef]);
 
-  const handleMouseMove = useCallback((e: MouseEvent) => {
+  const handleMouseMove = useCallback((e: PointerEvent) => {
     if (inputModeRef.current === InputMode.SELECT) { return false; }
 
     const cursorBeat = beatFromEvent({ target: playheadNodeElementRef.current!, clientX: e.clientX - 30 }, beatWidthRef.current);
@@ -258,11 +261,11 @@ export function PlayheadNode({
       !babyMouseDownRef.current && !playheadMouseDownRef.current
     )) return;
     if (babyMouseDownRef.current) {
-      setPlayheadPosX((cursorBeat + 1) * beatWidthRef.current);
+      setPlayheadPosX((cursorBeat) * beatWidthRef.current);
       playCompositionNotesAtBeat({
         audioContext,
         composition: compositionRef.current,
-        midiBeat: cursorBeat + 1,
+        midiBeat: cursorBeat,
         tempo: tempoRef.current,
         userInstruments: userInstrumentsRef.current,
         incrementBabyDanceFrame,
@@ -270,18 +273,18 @@ export function PlayheadNode({
     } else if (playheadMouseDownRef.current) {
       if (cursorBeat < startingPlayheadCursorPos.current) {
         setUserPlayheadBounds({
-          start: cursorBeat,
-          end: startingPlayheadCursorPos.current + 1,
+          start: cursorBeat - 1,
+          end: startingPlayheadCursorPos.current,
         });
       } else if (cursorBeat === startingPlayheadCursorPos.current) {
         setUserPlayheadBounds({
-          start: cursorBeat,
-          end: cursorBeat + 1,
+          start: cursorBeat - 1,
+          end: cursorBeat,
         });
       } else {
         setUserPlayheadBounds({
           start: startingPlayheadCursorPos.current,
-          end: cursorBeat + 1,
+          end: cursorBeat,
         });
       }
     }
@@ -297,11 +300,11 @@ export function PlayheadNode({
   }, [setBabyMouseDown, setPlayheadMouseDown]);
   
   useEffect(() => {
-    document.addEventListener("mouseup", handleMouseUp);
-    document.addEventListener("mousemove", handleMouseMove);
+    document.addEventListener("pointerup", handleMouseUp);
+    document.addEventListener("pointermove", handleMouseMove);
     return () => {
-      document.removeEventListener("mouseup", handleMouseUp);
-      document.removeEventListener("mousemove", handleMouseMove);
+      document.removeEventListener("pointerup", handleMouseUp);
+      document.removeEventListener("pointermove", handleMouseMove);
     };
   }, [handleMouseUp, handleMouseMove]);
 
@@ -310,22 +313,24 @@ export function PlayheadNode({
   return (
     <PlayheadContainer
       ref={playheadNodeElementRef}
-      onMouseDown={handleMouseDown}
+      onPointerDown={handleMouseDown}
       onDoubleClick={handleDoubleClick}
       $beatHeight={_beatHeight}
     >
+      <PlayheadTopLeftCoverup />
       <PlayheadStickyContainer $beatWidth={_beatWidth} $isMouseDown={_babyMouseDown || _codaMouseDown}>
         <PlayheadSubContainer>
           <BabyPlayheadImg
-            onMouseDown={handleBabyMouseDown}
+            onPointerDown={handleBabyMouseDown}
             src="trans.png"
             $frame={babyDanceFrame}
+            $yFrame={babyDanceYFrame}
             $playheadPosX={_playheadPosX}
             $preventPointerEvents={_babyMouseDown || _playheadMouseDown || _codaMouseDown || _isPlaying}
             $beatWidth={_beatWidth}
           />
           <PixelCoda
-            onMouseDown={handleCodaLeftMouseDown}
+            onPointerDown={handleCodaLeftMouseDown}
             $y={codaSpriteY}
             $left={_userPlayheadBounds?.start !== undefined ? _userPlayheadBounds.start * _beatWidth: 0}
             $inverted={false}
@@ -334,7 +339,7 @@ export function PlayheadNode({
             $opacity={1.0}
           />
           <PixelCoda
-            onMouseDown={handleCodaRightMouseDown}
+            onPointerDown={handleCodaRightMouseDown}
             $y={codaSpriteY}
             $left={_userPlayheadBounds?.end !== undefined ? (_userPlayheadBounds.end - 1) * _beatWidth : (endOfMeasureToLoopAtBeat - 1) * _beatWidth}
             $inverted={true}

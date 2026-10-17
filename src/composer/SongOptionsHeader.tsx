@@ -3,7 +3,7 @@ import styled from 'styled-components'
 import { renderOffline } from "../smplr/offline";
 import { SongSettingsContext } from './contexts/SongSettingsContextProvider';
 import { ActionButtonsContainer } from './ActionButtonFooter';
-import { createUserInstrument, UserInstrumentContext } from './contexts/UserInstrumentContextProvider';
+import { UserInstrumentContext } from './contexts/UserInstrumentContextProvider';
 import { AudioContextContext, CompositionByInstrument, convertCompositionByInstrumentToComposition, convertCompositionToCompositionByInstrument, DEFAULT_VOLUME, getARandomNote, getBeatLengthInMs, getEndOfMeasureToLoopAtBeat, getInstrumentInstructionFromNoteData, getNewInstrumentColor, JsonNoteData, SongJsonExport, SubdivisionType, TimeSignature, UserInstrument } from './consts';
 import { PristineContext } from './contexts/PristineContextProvider';
 import { generate } from "random-words";
@@ -24,30 +24,19 @@ const SongHeaderContainer = styled.div`
   background-color: white;
   height: 32px;
   display: flex;
-  // flex-wrap: wrap;
   gap: 4px;
   outline: 1px solid black;
   margin: 2px;
   align-items: center;
 `;
-// const TinySpriteImg = styled.img<{ $frame: number }>`
-//   margin: 10px 6px 8px 8px;
-//   width: 16px;
-//   height: 16px;
-//   image-rendering: pixelated;
-//   transform: scale(1.5);
-//   background-image: url('__tinySprites.png');
-//   background-position: ${({ $frame }) => `${($frame % 8)*-16}px ${Math.floor($frame / 8)*-16}px`};
-//   cursor: pointer;
-// `;
-const DancingBabyImg = styled.img<{ $frame: number }>`
+const DancingBabyImg = styled.img<{ $frame: number, $yFrame: number }>`
   margin: 8px 6px 10px 8px;
   width: 20px;
   height: 20px;
   image-rendering: pixelated;
   transform: scale(1.5);
   background-image: url('baby_dance_sheet.png');
-  background-position: ${({ $frame }) => `${$frame*-20}px 0px`};
+  background-position: ${({ $frame, $yFrame }) => `${$frame * -20}px ${$yFrame * -20}px`};
   cursor: pointer;
 `;
 const DivButton = styled.div`
@@ -83,8 +72,8 @@ export function SongOptionsHeader({footer}: {footer: React.ReactElement}) {
     tempoRef,
     setTempo,
   } = useContext(SongSettingsContext)!;
-  const { babyDanceFrame } = useContext(BabyDanceFrameContext)!;
-  const { incrementBabyDanceFrame } = useContext(PlayTheSongContext)!;
+  const { babyDanceFrame, babyDanceYFrame } = useContext(BabyDanceFrameContext)!;
+  const { incrementBabyDanceFrame, incrementBabyDanceYFrame } = useContext(PlayTheSongContext)!;
   const { _farthestRightNoteEnd } = useContext(CompositionContext)!;
   const { setPlayheadPosX } = useContext(PlayheadPosXContext)!;
   const { setPristine } = useContext(PristineContext)!;
@@ -107,6 +96,8 @@ export function SongOptionsHeader({footer}: {footer: React.ReactElement}) {
     setUserInstrumentIndex,
     getNewUserInstrument,
     setHowManyInstrumentsIEverMade,
+    createUserInstrument,
+    defaultSoundfontFileName,
   } = useContext(UserInstrumentContext)!;
 
   const endOfMeasureToLoopAtBeat = useMemo(() => {
@@ -125,18 +116,26 @@ export function SongOptionsHeader({footer}: {footer: React.ReactElement}) {
     const newUserInstruments: UserInstrument[] = await Promise.all(
       [...jsonObj.userInstruments.map(
         async (jsonInstrument, index) => {
-          // TODO(jaketrower): handle save/load with different .sf2s then the default !
-          const sf2Sampler = (await getNewUserInstrument(audioContext, index)).sf2Sampler;
-          const sf2InstrumentName = jsonInstrument.sf2InstrumentName ?? sf2Sampler?.instrumentNames[0];
+          const instrumentFileName = jsonInstrument.fileName ?? defaultSoundfontFileName;
+          let overrideBuffer: Uint8Array | undefined;
+          if (instrumentFileName !== defaultSoundfontFileName) {
+
+          }
+
+          const sf2Sampler = (await getNewUserInstrument(audioContext, index, overrideBuffer)).sf2Sampler;
+          let sf2InstrumentName = jsonInstrument.sf2InstrumentName ?? sf2Sampler?.instrumentNames[0];
+          const sf2InstrumentIndex = sf2Sampler?.instrumentNames.findIndex((name) => name === sf2InstrumentName) ?? -1;
+          if (sf2InstrumentIndex === -1) {
+            sf2InstrumentName = sf2Sampler?.instrumentNames[0];
+          }
           await sf2Sampler?.loadInstrument(sf2InstrumentName!);
           if (sf2Sampler) {
             sf2Sampler.output.volume = jsonInstrument.volume ?? DEFAULT_VOLUME;
           }
-          const sf2InstrumentIndex = sf2Sampler?.instrumentNames.findIndex((name) => name === sf2InstrumentName) ?? -1;
           return {
             name: jsonInstrument.name ?? `ins${index+1}`,
+            fileName: instrumentFileName,
             color: jsonInstrument.color ?? getNewInstrumentColor(index),
-            // TODO(jaketrower): handle save/load with different .sf2s then the default !
             sf2InstrumentName,
             sf2InstrumentIndex,
             volume: jsonInstrument.volume ?? DEFAULT_VOLUME,
@@ -154,7 +153,7 @@ export function SongOptionsHeader({footer}: {footer: React.ReactElement}) {
     manuallyUpdateFarthestRightNoteEnd();
     setPristine(true);
     clearUndoStack();
-  }, [audioContext, clearUndoStack, getNewUserInstrument, manuallyUpdateFarthestRightNoteEnd, setComposition, setHowManyInstrumentsIEverMade, setPlayheadPosX, setPristine, setSongName, setTempo, setTimeSignature, setUserInstrumentIndex, setUserInstruments]);
+  }, [audioContext, clearUndoStack, defaultSoundfontFileName, getNewUserInstrument, manuallyUpdateFarthestRightNoteEnd, setComposition, setHowManyInstrumentsIEverMade, setPlayheadPosX, setPristine, setSongName, setTempo, setTimeSignature, setUserInstrumentIndex, setUserInstruments]);
   const handleSaveCompositionToFile = useCallback(() => {
     const a = document.createElement("a");
     a.href = URL.createObjectURL(new Blob([JSON.stringify({
@@ -163,6 +162,7 @@ export function SongOptionsHeader({footer}: {footer: React.ReactElement}) {
       userInstruments: userInstrumentsRef.current.map((inst) => ({
         color: inst.color,
         volume: inst.volume,
+        fileName: inst.fileName,
         name: inst.name,
         sf2InstrumentName: inst.sf2InstrumentName,
         // TODO(jaketrower): Allow user uploaded .sf2 files to have a "memory" ???
@@ -207,7 +207,7 @@ export function SongOptionsHeader({footer}: {footer: React.ReactElement}) {
           const tripletBeatOffsetInSeconds = instrumentInstruction.subdivisionType === SubdivisionType.q
             ? 0
             : ((midiBeat - 1) % 4) * beatLengthInSeconds * ((beatLengthInSeconds * 4.0) / 3.0);
-          console.log(`Play note ${midiNote} at time ${midiBeat * beatLengthInSeconds + tripletBeatOffsetInSeconds}s (aka beat: ${midiBeat}) for ${durationSec}s`);
+          // console.log(`Play note ${midiNote} at time ${midiBeat * beatLengthInSeconds + tripletBeatOffsetInSeconds}s (aka beat: ${midiBeat}) for ${durationSec}s`);
           sf2Sampler.start({
             note: midiNote,
             time: (midiBeat * beatLengthInSeconds) + tripletBeatOffsetInSeconds,
@@ -218,7 +218,7 @@ export function SongOptionsHeader({footer}: {footer: React.ReactElement}) {
     }, {
       duration: endOfMeasureToLoopAtBeat * beatLengthInSeconds,
     });
-  }, [compositionRef, defaultSoundfontBuffer, endOfMeasureToLoopAtBeat, tempoRef, userInstrumentsRef]);
+  }, [compositionRef, createUserInstrument, defaultSoundfontBuffer, endOfMeasureToLoopAtBeat, tempoRef, userInstrumentsRef]);
 
   const handleExportSongToWav = useCallback(async () => {
     try {
@@ -369,6 +369,7 @@ export function SongOptionsHeader({footer}: {footer: React.ReactElement}) {
 
           return {
             name: userInstrumentName ?? `ins${index+1}`,
+            fileName: defaultSoundfontFileName,
             color: getNewInstrumentColor(index),
             // TODO(jaketrower): handle save/load with different .sf2s then the default !
             sf2InstrumentName,
@@ -388,7 +389,7 @@ export function SongOptionsHeader({footer}: {footer: React.ReactElement}) {
     manuallyUpdateFarthestRightNoteEnd();
     setPristine(true);
     clearUndoStack();
-  }, [audioContext, clearUndoStack, getNewUserInstrument, manuallyUpdateFarthestRightNoteEnd, setComposition, setHowManyInstrumentsIEverMade, setPlayheadPosX, setPristine, setTempo, setTimeSignature, setUserInstrumentIndex, setUserInstruments]);
+  }, [audioContext, clearUndoStack, defaultSoundfontFileName, getNewUserInstrument, manuallyUpdateFarthestRightNoteEnd, setComposition, setHowManyInstrumentsIEverMade, setPlayheadPosX, setPristine, setTempo, setTimeSignature, setUserInstrumentIndex, setUserInstruments]);
 
   const onLoadSongFile = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     try {
@@ -429,16 +430,14 @@ export function SongOptionsHeader({footer}: {footer: React.ReactElement}) {
   return (
     <>
       <SongHeaderContainer>
-        {/* <div><TinySpriteImg src="trans.png" $frame={tinySpriteFrame} onClick={() => {
-          incrementTinySpriteFrame();
-        }}/></div> */}
-        <div><DancingBabyImg src="trans.png" $frame={babyDanceFrame} onClick={() => {
-          incrementBabyDanceFrame(); 
+        <div><DancingBabyImg src="trans.png" $frame={babyDanceFrame} $yFrame={babyDanceYFrame} onClick={() => {
+          incrementBabyDanceFrame();
+          incrementBabyDanceYFrame();
           userInstrumentsRef.current[userInstrumentIndexRef.current].sf2Sampler?.start({ note: getARandomNote(), duration: 0.25 });
         }}/></div>
         <div style={{ display: 'flex', flexDirection: 'column', }}>
           <div style={{ textAlign: 'left', display: 'flex', alignItems: 'center', gap: 2 }}>
-            <b style={{ marginLeft: 2}}>Song Name:</b>
+            <b style={{ marginLeft: 2, width: 32}}>Song Name</b>:
             <input type="text" value={songName} onChange={(e) => {
               setSongName(e.target.value);
             }} />

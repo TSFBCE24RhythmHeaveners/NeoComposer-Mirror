@@ -1,4 +1,4 @@
-import React, { useCallback, useContext, useEffect, useMemo } from "react";
+import React, { useCallback, useContext, useEffect, useMemo, useRef } from "react";
 import styled from "styled-components";
 import { AudioContextContext, getARandomNote, InputMode, increaseKeyboardPianoOctaveShift, decreaseKeyboardPianoOctaveShift, getKeyboardPianoKey, NoteIdWithOffset, SubdivisionType, TimeSignature } from "./consts";
 import { UserInstrumentContext } from "./contexts/UserInstrumentContextProvider";
@@ -13,6 +13,8 @@ import { ClickedSelectedNotesContext } from "./contexts/ClickedSelectedNotesCont
 import { CompositionActionsContext } from "./contexts/CompositionActionsContextProvider";
 import { ExecuteUndoRedoContext } from "./contexts/ExecuteUndoRedoContextProvider";
 import { UndoRedoContext } from "./contexts/UndoRedoContextProvider";
+import { PlayheadContext } from "./contexts/PlayheadContextProvider";
+import { Input, NoteMessageEvent, PortEvent, WebMidi } from "webmidi";
 
 const Footer = styled.div`
   max-width: 960px;
@@ -23,11 +25,13 @@ const Footer = styled.div`
 export function Maestro({
   renderChildren,
   _inputMode,
+  inputModeRef,
   setInputMode,
   trySetInputMode,
 } : {
   renderChildren: (footer: React.ReactElement, undoRedoButtons: React.ReactElement) => React.ReactElement,
   _inputMode: InputMode,
+  inputModeRef: React.RefObject<InputMode>,
   setInputMode: (newInputMode: InputMode) => void,
   trySetInputMode: (newInputMode: InputMode, isMouseDown: boolean) => void,
 }) {
@@ -63,6 +67,7 @@ export function Maestro({
     selectedNotesRef,
     setSelectedNotes,
     selectNotesByInstrument,
+    toggleSelectionOnNoteSet,
     heldPianoKeys,
     setHeldPianoKeys,
   } = useContext(ClickedSelectedNotesContext)!;
@@ -78,6 +83,10 @@ export function Maestro({
     addCompositionNotes,
     removeCompositionNotes,
   } = useContext(CompositionActionsContext)!;
+  const {
+    userPlayheadBoundsRef,
+    setUserPlayheadBounds,
+  } = useContext(PlayheadContext)!;
 
   const onToggleSubdivisionType = useCallback(() => {
       if (subdivisionTypeRef.current === SubdivisionType.q) {
@@ -142,7 +151,7 @@ export function Maestro({
     copiedNotesOffsetRef.current = 0;
   }, [copiedNotesOffsetRef, tryCopySelectedNotes, tryDeleteSelectedNotes]);
 
-  const tryPasteCopiedNotes = useCallback(() => {
+  const tryPasteCopiedNotes = useCallback((e: KeyboardEvent | PointerEvent) => {
     console.log("TODO: test this while dragging other selected notes...");
     console.log("TODO: need to test the midiBeat increase with different copied subdivision types?")
     const copiedNotes = Object.values(copiedNotesRef.current);
@@ -163,14 +172,27 @@ export function Maestro({
     const pastedNotes = addCompositionNotes(notesToPaste, true /* shouldAddToUndoStack */);
     // setIsCompositionMouseDown(true);
     // setClickedNote(topLeftmostCopiedNote.noteId);
-    setSelectedNotes(pastedNotes.reduce((acc, note) => {
+    const pastedNotesToSelect = pastedNotes.reduce((acc, note) => {
       return {
         ...acc,
-        [note.noteId]: { offset: { x: 0, y: 0 } }
+        [note.noteId]: {
+          noteId: note.noteId,
+          offset: { x: 0, y: 0 },
+        },
       };
-    }, {} as Record<string, NoteIdWithOffset>));
-  }, [addCompositionNotes, copiedNotesOffsetRef, copiedNotesRef, setSelectedNotes, userInstrumentIndexRef]);
+    }, {} as Record<string, NoteIdWithOffset>);
+    if (e.shiftKey) {
+      setSelectedNotes({
+        ...selectedNotesRef.current,
+        ...pastedNotesToSelect,
+      })
+    } else {
+      setSelectedNotes(pastedNotesToSelect);
+    }
+  }, [addCompositionNotes, copiedNotesOffsetRef, copiedNotesRef, selectedNotesRef, setSelectedNotes, userInstrumentIndexRef]);
 
+  const isShiftKeyDown = useRef(false);
+  const isMetaKeyDown = useRef(false);
   const handleKeyDown = useCallback(
     async (e: KeyboardEvent) => {
       if (e.repeat) {
@@ -181,9 +203,9 @@ export function Maestro({
       }
       if (e.key === "z" && (e.metaKey || e.ctrlKey)) {
         if (e.shiftKey) {
-          if (canRedo) await handleRedo();
+          if (canRedo && !isCompositionMouseDownRef.current) await handleRedo();
         } else {
-          if (canUndo) await handleUndo();
+          if (canUndo && !isCompositionMouseDownRef.current) await handleUndo();
         }
       }
       if (e.key === "ArrowDown" || e.key === "ArrowUp" || e.key === "ArrowLeft" || e.key === "ArrowRight") {
@@ -236,7 +258,7 @@ export function Maestro({
         }
       }
       if (e.key === "a" && (e.ctrlKey || e.metaKey)) {
-        setSelectedNotes({
+        const notesToSelect = {
           ...(Object.entries(_compositionByInstructionIdRef.current).reduce((acc, [noteId, _]) => ({
             ...acc,
             [noteId]: {
@@ -244,7 +266,12 @@ export function Maestro({
               offset: { x: 0, y: 0 },
             },
           }), {} as Record<string, NoteIdWithOffset>)),
-        });
+        };
+        if (e.shiftKey) {
+          toggleSelectionOnNoteSet(notesToSelect);
+        } else {
+          setSelectedNotes(notesToSelect);
+        }
         e.preventDefault();
         return false;
       }
@@ -257,7 +284,7 @@ export function Maestro({
         return false;
       }
       if (e.key === "v" && (e.ctrlKey || e.metaKey)) {
-        tryPasteCopiedNotes();
+        tryPasteCopiedNotes(e);
         return false;
       }
       if (e.key === "q") {
@@ -276,14 +303,21 @@ export function Maestro({
         return false;
       }
       if (e.key === "Escape") {
+        let didDoSomethingElse = false;
         if (isCompositionMouseDownRef.current) {
           setIsCompositionMouseDown(false);
+          didDoSomethingElse = true;
         }
         if (clickedNoteRef.current) {
           setClickedNote(undefined);
+          didDoSomethingElse = true;
         }
         if (Object.keys(selectedNotesRef.current).length > 0) {
           setSelectedNotes({});
+          didDoSomethingElse = true;
+        }
+        if (!didDoSomethingElse && userPlayheadBoundsRef.current) {
+          setUserPlayheadBounds(undefined);
         }
         return false;
       }
@@ -313,9 +347,18 @@ export function Maestro({
         return false;
       }
       if (e.key === "Shift") {
+        isShiftKeyDown.current = true;
         trySetInputMode(InputMode.SELECT, isCompositionMouseDownRef.current);
         if (isCompositionMouseDownRef.current) {
           onCompositionMouseUpRef.current = () => setInputMode(InputMode.SELECT);
+        }
+        return false;
+      }
+      if (e.key === "Meta" || e.key === "Control") {
+        isMetaKeyDown.current = true;
+        trySetInputMode(InputMode.DELETE, isCompositionMouseDownRef.current);
+        if (isCompositionMouseDownRef.current) {
+          onCompositionMouseUpRef.current = () => setInputMode(InputMode.DELETE);
         }
         return false;
       }
@@ -337,8 +380,10 @@ export function Maestro({
       }
       const playedNote = getKeyboardPianoKey(e.key);
       if (!playedNote) return;
-      heldPianoKeys[playedNote] = true;
-      setHeldPianoKeys({...heldPianoKeys});
+      setHeldPianoKeys((prev) => ({
+        ...prev,
+        [playedNote]: { ...prev[playedNote], key: true }
+      }));
       const currUserInstrument = userInstrumentsRef.current[userInstrumentIndexRef.current];
       if (!currUserInstrument.sf2Sampler) return;
       currUserInstrument.sf2Sampler.start({
@@ -348,44 +393,109 @@ export function Maestro({
       });
       incrementBabyDanceFrame();
     },
-    [heldPianoKeys, setHeldPianoKeys, userInstrumentsRef, userInstrumentIndexRef, audioContext.currentTime, incrementBabyDanceFrame, canRedo, handleRedo, canUndo, handleUndo, clickedNoteRef, selectedNotesRef, _compositionByInstructionIdRef, removeCompositionNotes, addCompositionNotes, debouncedAddToUndoStack, setSelectedNotes, tryCopySelectedNotes, tryCutSelectedNotes, tryPasteCopiedNotes, onToggleSubdivisionType, onToggleTimeSignature, tryDeleteSelectedNotes, isCompositionMouseDownRef, setIsCompositionMouseDown, setClickedNote, setUserInstrumentIndex, selectNotesByInstrument, trySetInputMode, onCompositionMouseUpRef, setInputMode, _isPlaying, handleStopComposition, handlePlayComposition, isLoopingRef]
+    [setHeldPianoKeys, userInstrumentsRef, userInstrumentIndexRef, audioContext.currentTime, incrementBabyDanceFrame, canRedo, handleRedo, canUndo, handleUndo, clickedNoteRef, selectedNotesRef, _compositionByInstructionIdRef, removeCompositionNotes, addCompositionNotes, debouncedAddToUndoStack, toggleSelectionOnNoteSet, setSelectedNotes, tryCopySelectedNotes, tryCutSelectedNotes, tryPasteCopiedNotes, onToggleSubdivisionType, onToggleTimeSignature, tryDeleteSelectedNotes, isCompositionMouseDownRef, userPlayheadBoundsRef, setIsCompositionMouseDown, setClickedNote, setUserPlayheadBounds, setUserInstrumentIndex, selectNotesByInstrument, trySetInputMode, onCompositionMouseUpRef, setInputMode, _isPlaying, handleStopComposition, handlePlayComposition, isLoopingRef]
   );
+
+  const webMidiRef = useRef<typeof WebMidi | undefined>(undefined);
+  const onMidiInputNoteOff = useCallback((e: NoteMessageEvent) => {
+    const playedNote = e.note.identifier;
+    setHeldPianoKeys((prev) => (playedNote in prev ? {
+      ...prev,
+      [playedNote]: { ...prev[playedNote], key: false }
+    } : prev));
+  }, [setHeldPianoKeys]);
+  const onMidiInputNoteOn = useCallback((e: NoteMessageEvent) => {
+    if (e.rawValue === 0 || e.value === 0.0) {
+      onMidiInputNoteOff(e);
+    } else {
+      const playedNote = e.note.identifier;
+      if (!playedNote) return;
+      setHeldPianoKeys((prev) => ({
+        ...prev,
+        [playedNote]: { ...prev[playedNote], key: true }
+      }));
+      const currUserInstrument = userInstrumentsRef.current[userInstrumentIndexRef.current];
+      if (!currUserInstrument.sf2Sampler) return;
+      currUserInstrument.sf2Sampler.start({
+        note: playedNote,
+        time: audioContext.currentTime,
+        duration: 0.25,
+      });
+      incrementBabyDanceFrame();
+    }
+  }, [audioContext, incrementBabyDanceFrame, onMidiInputNoteOff, setHeldPianoKeys, userInstrumentIndexRef, userInstrumentsRef]);
+  useEffect(() => {
+    const onMidiInputConnected = (e: PortEvent) => {
+      if (e.port instanceof Input) {
+        (e.port as Input).addListener("noteon", onMidiInputNoteOn);
+        (e.port as Input).addListener("noteoff", onMidiInputNoteOff);
+      }
+    };
+    const onMidiInputDisconnected = (e: PortEvent) => {
+      if (e.port instanceof Input) {
+        (e.port as Input).removeListener("noteon", onMidiInputNoteOn);
+        (e.port as Input).removeListener("noteon", onMidiInputNoteOff);
+      }
+    };
+    WebMidi.enable().then((webMidi) => {
+      webMidiRef.current = webMidi;
+      webMidiRef.current.addListener("connected", onMidiInputConnected);
+      webMidiRef.current.addListener("disconnected", onMidiInputConnected);
+    }).catch(err => console.log("Error enabling WebMidi: ", err));
+    return () => {
+      if (webMidiRef.current) {
+        webMidiRef.current.removeListener("connected", onMidiInputConnected);
+        webMidiRef.current.removeListener("disconnected", onMidiInputDisconnected);
+      }
+    }
+  }, [onMidiInputNoteOff, onMidiInputNoteOn]);
 
   const handleKeyUp = useCallback((e: KeyboardEvent) => {
     if (e.key === "Shift") {
-      trySetInputMode(InputMode.DEFAULT, isCompositionMouseDownRef.current);
-      if (isCompositionMouseDownRef.current) {
-        onCompositionMouseUpRef.current = () => setInputMode(InputMode.DEFAULT);
+      if (inputModeRef.current === InputMode.SELECT) {
+        trySetInputMode(isMetaKeyDown.current ? InputMode.DELETE : InputMode.DEFAULT, isCompositionMouseDownRef.current);
+        if (isCompositionMouseDownRef.current) {
+          onCompositionMouseUpRef.current = () => setInputMode(isMetaKeyDown.current ? InputMode.DELETE : InputMode.DEFAULT);
+        }
       }
-      return false;
+      isShiftKeyDown.current = false;
+    }
+    if (e.key === "Meta" || e.key === "Control") {
+      if (inputModeRef.current === InputMode.DELETE) {
+        trySetInputMode(isShiftKeyDown.current ? InputMode.SELECT : InputMode.DEFAULT, isCompositionMouseDownRef.current);
+        if (isCompositionMouseDownRef.current) {
+          onCompositionMouseUpRef.current = () => setInputMode(isShiftKeyDown.current ? InputMode.SELECT : InputMode.DEFAULT);
+        }
+      }
+      isMetaKeyDown.current = false;
     }
     const playedNote = getKeyboardPianoKey(e.key);
     if (!playedNote) return;
-    if (playedNote in heldPianoKeys) {
-      delete heldPianoKeys[playedNote];
-      setHeldPianoKeys({...heldPianoKeys});
-    }
-  }, [heldPianoKeys, setHeldPianoKeys, trySetInputMode, isCompositionMouseDownRef, onCompositionMouseUpRef, setInputMode]);
+    setHeldPianoKeys((prev) => (playedNote in prev ? {
+      ...prev,
+      [playedNote]: { ...prev[playedNote], key: false }
+    } : prev));
+  }, [inputModeRef, trySetInputMode, isCompositionMouseDownRef, onCompositionMouseUpRef, setInputMode, setHeldPianoKeys]);
 
-  const handleMouseDown = useCallback((e: MouseEvent) => {
+  const handleMouseDown = useCallback((e: PointerEvent) => {
     if (e.shiftKey) return false;
     setSelectedNotes({});
   }, [setSelectedNotes]);
 
-  const handleMouseUp = useCallback((e: MouseEvent) => {
+  const handleMouseUp = useCallback((e: PointerEvent) => {
 
   }, []);
 
   useEffect(() => {
     document.addEventListener("keydown", handleKeyDown);
     document.addEventListener("keyup", handleKeyUp);
-    document.addEventListener("mousedown", handleMouseDown);
-    document.addEventListener("mouseup", handleMouseUp);
+    document.addEventListener("pointerdown", handleMouseDown);
+    document.addEventListener("pointerup", handleMouseUp);
     return () => {
       document.removeEventListener("keydown", handleKeyDown);
       document.removeEventListener("keyup", handleKeyUp);
-      document.removeEventListener("mousedown", handleMouseDown);
-    document.removeEventListener("mouseup", handleMouseUp);
+      document.removeEventListener("pointerdown", handleMouseDown);
+    document.removeEventListener("pointerup", handleMouseUp);
     };
   }, [handleKeyDown, handleKeyUp, handleMouseDown, handleMouseUp]);
   useEffect(() => {

@@ -7,12 +7,6 @@ import { UserInstrumentsHeader } from "./UserInstrumentsHeader";
 import { CompositionCanvas } from "./composition/CompositionCanvas";
 import { PlayheadNode } from "./PlayheadNode";
 
-const MaestroContainer = styled.div`
-  display: flex;
-  flex-direction: column;
-  height: 100%;
-`;
-
 const Header = styled.div`
   max-width: 960px;
   display: flex;
@@ -35,10 +29,11 @@ export function MaestroConductor() {
   return (
     <Maestro
       _inputMode={_inputMode}
+      inputModeRef={inputModeRef}
       setInputMode={setInputMode}
       trySetInputMode={trySetInputMode}
       renderChildren={(footer: React.ReactElement, undoRedoButtons: React.ReactElement) => (
-        <MaestroContainer>
+        <>
           <Header>
             <SongOptionsHeader footer={footer} />
             <div style={{display: "flex"}}>
@@ -55,12 +50,7 @@ export function MaestroConductor() {
           <CompositionCanvas _inputMode={_inputMode} inputModeRef={inputModeRef} setInputMode={setInputMode}>
             <PlayheadNode _inputMode={_inputMode} inputModeRef={inputModeRef} />
           </CompositionCanvas>
-          {/* <div style={{textAlign: "left", marginTop: "-8px"}}>
-            <ul>
-              <li>when saving/loading instruments with non-default soundfonts, need to mark them on save, and prompt you to load those sf2s when you load</li>
-            </ul>
-          </div> */}
-        </MaestroContainer>
+        </>
       )} />
   );
 }
